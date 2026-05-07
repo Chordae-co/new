@@ -23,7 +23,7 @@ type Props = {
   containerRef: React.RefObject<HTMLDivElement | null>
 }
 
-const DRAG_THRESHOLD = 4 // px — movement beyond this is a drag, not a click
+const DRAG_THRESHOLD = 4 // px
 
 export function FurnitureItem({
   furniture,
@@ -40,14 +40,12 @@ export function FurnitureItem({
   const sourceDataRef = useRef<ImageData | null>(null)
   const [loaded, setLoaded] = useState(false)
 
-  // Drag state
   const dragRef = useRef<{
     startX: number; startY: number
     startXPct: number; startYPct: number
     didDrag: boolean
   } | null>(null)
 
-  // Resize state
   const resizeRef = useRef<{ startX: number; startWidth: number; handle: string } | null>(null)
 
   useEffect(() => {
@@ -84,8 +82,8 @@ export function FurnitureItem({
   const getRect = useCallback(() => containerRef.current?.getBoundingClientRect() ?? null, [containerRef])
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
 
-  // ── Drag ──────────────────────────────────────────────────────────────────
-  const onDragDown = useCallback((e: React.PointerEvent) => {
+  // ── Drag (only when selected) ─────────────────────────────────────────────
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
     dragRef.current = {
@@ -95,48 +93,51 @@ export function FurnitureItem({
     }
   }, [position.xPercent, position.yPercent])
 
-  const onDragMove = useCallback((e: React.PointerEvent) => {
-    if (!dragRef.current) return
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    // Resize takes priority
+    if (resizeRef.current) {
+      const rect = getRect(); if (!rect) return
+      const dx = ((e.clientX - resizeRef.current.startX) / rect.width) * 100
+      const sign = resizeRef.current.handle === "right" ? 1 : -1
+      onPositionChange({ widthPercent: clamp(resizeRef.current.startWidth + sign * dx * 2, 5, 80) })
+      return
+    }
+
+    // Only drag if selected
+    if (!dragRef.current || !isSelected) return
     const dx = e.clientX - dragRef.current.startX
     const dy = e.clientY - dragRef.current.startY
     if (!dragRef.current.didDrag && Math.hypot(dx, dy) < DRAG_THRESHOLD) return
     dragRef.current.didDrag = true
     const rect = getRect(); if (!rect) return
-    const dxPct = (dx / rect.width) * 100
-    const dyPct = (dy / rect.height) * 100
     const hw = position.widthPercent / 2
     onPositionChange({
-      xPercent: clamp(dragRef.current.startXPct + dxPct, hw, 100 - hw),
-      yPercent: clamp(dragRef.current.startYPct + dyPct, 0, 100),
+      xPercent: clamp(dragRef.current.startXPct + (dx / rect.width) * 100, hw, 100 - hw),
+      yPercent: clamp(dragRef.current.startYPct + (dy / rect.height) * 100, 0, 100),
     })
-  }, [getRect, position.widthPercent, onPositionChange])
+  }, [getRect, isSelected, position.widthPercent, onPositionChange])
 
-  const onDragUp = useCallback((e: React.PointerEvent) => {
-    if (!dragRef.current) return
-    // If pointer barely moved — treat as a click → toggle selection
-    if (!dragRef.current.didDrag) {
+  const onPointerUp = useCallback((e: React.PointerEvent) => {
+    if (resizeRef.current) { resizeRef.current = null; return }
+    if (dragRef.current && !dragRef.current.didDrag) {
+      // Clean tap — toggle selection
       e.stopPropagation()
       onSelect()
     }
     dragRef.current = null
   }, [onSelect])
 
-  // ── Resize ────────────────────────────────────────────────────────────────
+  const onPointerCancel = useCallback(() => {
+    dragRef.current = null
+    resizeRef.current = null
+  }, [])
+
+  // ── Resize handles ────────────────────────────────────────────────────────
   const onResizeDown = useCallback((e: React.PointerEvent, handle: string) => {
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
     resizeRef.current = { startX: e.clientX, startWidth: position.widthPercent, handle }
   }, [position.widthPercent])
-
-  const onResizeMove = useCallback((e: React.PointerEvent) => {
-    if (!resizeRef.current) return
-    const rect = getRect(); if (!rect) return
-    const dx = ((e.clientX - resizeRef.current.startX) / rect.width) * 100
-    const sign = resizeRef.current.handle === "right" ? 1 : -1
-    onPositionChange({ widthPercent: clamp(resizeRef.current.startWidth + sign * dx * 2, 5, 80) })
-  }, [getRect, onPositionChange])
-
-  const onResizeUp = useCallback(() => { resizeRef.current = null }, [])
 
   const { xPercent, yPercent, widthPercent, zIndex } = position
 
@@ -158,10 +159,10 @@ export function FurnitureItem({
       touchAction: "none", userSelect: "none",
     }}>
       <div
-        onPointerDown={onDragDown}
-        onPointerMove={(e) => { onDragMove(e); onResizeMove(e) }}
-        onPointerUp={onDragUp}
-        onPointerCancel={() => { dragRef.current = null; resizeRef.current = null }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
         style={{ cursor: isSelected ? "grab" : "pointer", position: "relative" }}
       >
         <canvas
@@ -181,7 +182,6 @@ export function FurnitureItem({
 
         {isSelected && (
           <>
-            {/* Delete button */}
             <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
@@ -198,20 +198,12 @@ export function FurnitureItem({
               }}
             >×</button>
 
-            {/* Left resize handle */}
             <div
               onPointerDown={(e) => onResizeDown(e, "left")}
-              onPointerMove={onResizeMove}
-              onPointerUp={onResizeUp}
-              onPointerCancel={onResizeUp}
               style={{ ...handleStyle, left: -9 }}
             />
-            {/* Right resize handle */}
             <div
               onPointerDown={(e) => onResizeDown(e, "right")}
-              onPointerMove={onResizeMove}
-              onPointerUp={onResizeUp}
-              onPointerCancel={onResizeUp}
               style={{ ...handleStyle, right: -9 }}
             />
           </>

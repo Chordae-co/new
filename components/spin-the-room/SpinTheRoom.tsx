@@ -76,7 +76,7 @@ export function SpinTheRoom() {
     setOccupiedSlots(new Set())
   }
 
-  const handleSelectItem = (id: FurnitureId) => {
+  const handleSelectItem = (id: FurnitureId | null) => {
     setSelectedId((prev) => (prev === id ? null : id))
   }
 

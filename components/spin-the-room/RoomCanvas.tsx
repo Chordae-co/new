@@ -17,7 +17,7 @@ type Props = {
   onUpload: (file: File) => void
   placedItems: PlacedItem[]
   selectedId: FurnitureId | null
-  onSelectItem: (id: FurnitureId) => void
+  onSelectItem: (id: FurnitureId | null) => void
   onPositionChange: (id: FurnitureId, pos: Partial<FreePosition>) => void
   onRemoveItem: (id: FurnitureId) => void
 }
@@ -66,7 +66,8 @@ export function RoomCanvas({
     <div
       ref={containerRef}
       className="relative aspect-[16/10] w-full overflow-hidden rounded-2xl border border-border bg-[#121212]"
-      onClick={() => onSelectItem(null as unknown as FurnitureId)}
+      // Only deselect when clicking the canvas background directly (not bubbled from a furniture item)
+      onClick={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).tagName === "IMG") onSelectItem(null) }}
     >
       <img
         src={roomImageUrl}
