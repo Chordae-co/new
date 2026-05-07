@@ -85,6 +85,7 @@ export function WallColorVisualizer() {
               <button id="toolWand" type="button" className="tool-btn active">Magic Select</button>
               <button id="toolPaint" type="button" className="tool-btn">Paint</button>
               <button id="toolEraser" type="button" className="tool-btn">Eraser</button>
+              <button id="toolLasso" type="button" className="tool-btn">✂ Lasso Erase</button>
             </div>
           </div>
           <div className="rounded-2xl border border-border bg-background/30 p-4">
@@ -107,13 +108,23 @@ export function WallColorVisualizer() {
         </div>
 
         <p className="text-xs leading-relaxed text-muted-foreground">
-          1) Upload 2) Pick color 3) Use Magic Select to add regions, Paint to draw in, and Eraser to clean edges.
+          1) Upload 2) Pick color 3) Use Magic Select to add regions, Paint to draw in, Eraser to clean edges, and ✂ Lasso Erase to draw around anything you want removed — it&apos;ll be filled in automatically.
           Saved snapshots appear below and open in preview when clicked.
         </p>
 
         <div className="rounded-2xl border border-border bg-secondary/40 p-4">
-          <div className="flex min-h-[320px] items-center justify-center overflow-auto rounded-xl border border-border/70 bg-[#121212] p-2">
+          <div className="relative flex min-h-[320px] items-center justify-center overflow-auto rounded-xl border border-border/70 bg-[#121212] p-2">
             <canvas id="previewCanvas" style={{ display: "none", maxWidth: "100%" }} />
+            <canvas
+              id="lassoCanvas"
+              style={{
+                display: "none",
+                position: "fixed",
+                pointerEvents: "none",
+                zIndex: 50,
+                cursor: "crosshair",
+              }}
+            />
             <div id="placeholder" className="max-w-sm text-center text-sm text-muted-foreground">
               Upload an image to start. Visual output and editing behavior are powered by the production visualizer engine.
             </div>
