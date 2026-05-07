@@ -21,7 +21,7 @@ import { PieceActions } from "./PieceActions"
 
 function slotToFreePosition(slot: SlotId): FreePosition {
   const s = SLOTS[slot]
-  return { xPercent: s.xPercent, yPercent: s.yPercent, widthPercent: s.widthPercent, zIndex: s.zIndex }
+  return { xPercent: s.xPercent, yPercent: s.yPercent, widthPercent: s.widthPercent, zIndex: s.zIndex, rotationDeg: 0 }
 }
 
 export function SpinTheRoom() {

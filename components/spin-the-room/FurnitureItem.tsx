@@ -9,6 +9,7 @@ export type FreePosition = {
   yPercent: number
   widthPercent: number
   zIndex: number
+  rotationDeg: number
 }
 
 type Props = {
@@ -48,6 +49,11 @@ export function FurnitureItem({
 
   const resizeRef = useRef<{ startX: number; startWidth: number; handle: string } | null>(null)
 
+  // Rotate: track center of the element and starting angle
+  const rotateRef = useRef<{
+    centerX: number; centerY: number; startAngle: number; startRotation: number
+  } | null>(null)
+
   useEffect(() => {
     let cancelled = false
     const img = new Image()
@@ -82,7 +88,7 @@ export function FurnitureItem({
   const getRect = useCallback(() => containerRef.current?.getBoundingClientRect() ?? null, [containerRef])
   const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v))
 
-  // ── Drag (only when selected) ─────────────────────────────────────────────
+  // ── Drag ─────────────────────────────────────────────────────────────────
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
@@ -94,7 +100,6 @@ export function FurnitureItem({
   }, [position.xPercent, position.yPercent])
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
-    // Resize takes priority
     if (resizeRef.current) {
       const rect = getRect(); if (!rect) return
       const dx = ((e.clientX - resizeRef.current.startX) / rect.width) * 100
@@ -102,8 +107,6 @@ export function FurnitureItem({
       onPositionChange({ widthPercent: clamp(resizeRef.current.startWidth + sign * dx * 2, 5, 80) })
       return
     }
-
-    // Only drag if selected
     if (!dragRef.current || !isSelected) return
     const dx = e.clientX - dragRef.current.startX
     const dy = e.clientY - dragRef.current.startY
@@ -120,7 +123,6 @@ export function FurnitureItem({
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     if (resizeRef.current) { resizeRef.current = null; return }
     if (dragRef.current && !dragRef.current.didDrag) {
-      // Clean tap — toggle selection
       e.stopPropagation()
       onSelect()
     }
@@ -130,16 +132,43 @@ export function FurnitureItem({
   const onPointerCancel = useCallback(() => {
     dragRef.current = null
     resizeRef.current = null
+    rotateRef.current = null
   }, [])
 
-  // ── Resize handles ────────────────────────────────────────────────────────
+  // ── Resize ────────────────────────────────────────────────────────────────
   const onResizeDown = useCallback((e: React.PointerEvent, handle: string) => {
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
     resizeRef.current = { startX: e.clientX, startWidth: position.widthPercent, handle }
   }, [position.widthPercent])
 
-  const { xPercent, yPercent, widthPercent, zIndex } = position
+  // ── Rotate ────────────────────────────────────────────────────────────────
+  const onRotateDown = useCallback((e: React.PointerEvent) => {
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    // Find the center of the element in screen coords
+    const el = e.currentTarget.parentElement?.parentElement
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const centerX = rect.left + rect.width / 2
+    const centerY = rect.top + rect.height / 2
+    const startAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX) * (180 / Math.PI)
+    rotateRef.current = { centerX, centerY, startAngle, startRotation: position.rotationDeg }
+  }, [position.rotationDeg])
+
+  const onRotateMove = useCallback((e: React.PointerEvent) => {
+    if (!rotateRef.current) return
+    const { centerX, centerY, startAngle, startRotation } = rotateRef.current
+    const currentAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX) * (180 / Math.PI)
+    const delta = currentAngle - startAngle
+    onPositionChange({ rotationDeg: startRotation + delta })
+  }, [onPositionChange])
+
+  const onRotateUp = useCallback(() => {
+    rotateRef.current = null
+  }, [])
+
+  const { xPercent, yPercent, widthPercent, zIndex, rotationDeg } = position
 
   const handleStyle: React.CSSProperties = {
     position: "absolute", width: 18, height: 18,
@@ -153,11 +182,34 @@ export function FurnitureItem({
       position: "absolute",
       left: `${xPercent}%`, top: `${yPercent}%`,
       width: `${widthPercent}%`,
-      transform: "translate(-50%, -50%)",
+      transform: `translate(-50%, -50%) rotate(${rotationDeg}deg)`,
       zIndex,
       animation: animateIn ? "drop-in 0.6s cubic-bezier(0.34, 1.56, 0.64, 1)" : undefined,
       touchAction: "none", userSelect: "none",
     }}>
+      {/* Rotate handle — sits above the item, only visible when selected */}
+      {isSelected && (
+        <div style={{ position: "absolute", top: -36, left: "50%", transform: "translateX(-50%)", display: "flex", flexDirection: "column", alignItems: "center", zIndex: 20 }}>
+          {/* stem */}
+          <div style={{ width: 2, height: 14, background: "#c89968" }} />
+          {/* handle dot */}
+          <div
+            onPointerDown={onRotateDown}
+            onPointerMove={onRotateMove}
+            onPointerUp={onRotateUp}
+            onPointerCancel={onRotateUp}
+            title="Rotate"
+            style={{
+              width: 20, height: 20, borderRadius: "50%",
+              background: "#c89968", border: "2px solid white",
+              cursor: "grab", touchAction: "none",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 11, color: "white", userSelect: "none",
+            }}
+          >↻</div>
+        </div>
+      )}
+
       <div
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -198,14 +250,8 @@ export function FurnitureItem({
               }}
             >×</button>
 
-            <div
-              onPointerDown={(e) => onResizeDown(e, "left")}
-              style={{ ...handleStyle, left: -9 }}
-            />
-            <div
-              onPointerDown={(e) => onResizeDown(e, "right")}
-              style={{ ...handleStyle, right: -9 }}
-            />
+            <div onPointerDown={(e) => onResizeDown(e, "left")} style={{ ...handleStyle, left: -9 }} />
+            <div onPointerDown={(e) => onResizeDown(e, "right")} style={{ ...handleStyle, right: -9 }} />
           </>
         )}
       </div>
