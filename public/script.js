@@ -98,8 +98,8 @@ imageInput?.addEventListener("change", (event) => {
       historyStack = []; redoStack = [];
       canvas.style.display  = "block";
       placeholder.style.display = "none";
-      computeMajorAreaMask();
-      applyCurrentColor();
+      // Don't auto-apply magic select on load — user triggers it manually
+      ctx.putImageData(originalImageData, 0, 0);
       pushHistory();
     };
     img.src = reader.result;
@@ -305,36 +305,39 @@ function applyLassoErase(poly) {
     working[i*3]=src[i*4]; working[i*3+1]=src[i*4+1]; working[i*3+2]=src[i*4+2];
   }
 
-  // Onion-layer inpainting: fill border pixels first (those with known neighbours),
-  // expanding inward. Distance-weighted sampling for smooth gradients.
+  // Onion-layer inpainting — propagate from the known border pixels inward.
+  // Keep the search radius SMALL (4px) so we copy texture from immediately
+  // adjacent pixels rather than averaging over a wide area. This produces
+  // a sharp, texture-preserving fill instead of a blurry smear.
   const remaining=needsFill.slice();
   let totalLeft=0;
   for (let i=0;i<remaining.length;i++) if (remaining[i]) totalLeft++;
 
   const maxPasses=Math.ceil(Math.max(maxX-minX,maxY-minY)/2)+10;
+  const SEARCH_R=4; // small radius = sharp, texture-faithful fill
 
   for (let pass=0;pass<maxPasses&&totalLeft>0;pass++) {
     const filled=[];
-    const searchR=Math.min(24, 6+pass*3);
 
     for (let y=minY;y<=maxY;y++) for (let x=minX;x<=maxX;x++) {
       const idx=y*W+x;
       if (!remaining[idx]) continue;
-      // Only process pixels that border a known pixel (4-connected)
+      // Only fill pixels that touch a known pixel (4-connected border)
       let hasBorder=false;
       for (const [nx,ny] of [[x+1,y],[x-1,y],[x,y+1],[x,y-1]]) {
         if (nx>=0&&ny>=0&&nx<W&&ny<H&&!remaining[ny*W+nx]) { hasBorder=true; break; }
       }
       if (!hasBorder) continue;
 
+      // Sample only from immediately neighbouring known pixels with distance weighting
       let rS=0,gS=0,bS=0,wS=0;
-      for (let dy=-searchR;dy<=searchR;dy++) for (let dx=-searchR;dx<=searchR;dx++) {
-        if (dx*dx+dy*dy>searchR*searchR) continue;
+      for (let dy=-SEARCH_R;dy<=SEARCH_R;dy++) for (let dx=-SEARCH_R;dx<=SEARCH_R;dx++) {
+        if (dx*dx+dy*dy>SEARCH_R*SEARCH_R) continue;
         const nx=x+dx,ny=y+dy;
         if (nx<0||ny<0||nx>=W||ny>=H) continue;
         const ni=ny*W+nx;
-        if (remaining[ni]) continue;
-        const w=1/(Math.sqrt(dx*dx+dy*dy)+1);
+        if (remaining[ni]) continue; // not yet filled
+        const w=1/(Math.sqrt(dx*dx+dy*dy)+0.5); // strong distance falloff
         rS+=working[ni*3]*w; gS+=working[ni*3+1]*w; bS+=working[ni*3+2]*w; wS+=w;
       }
       if (!wS) continue;
@@ -345,42 +348,29 @@ function applyLassoErase(poly) {
     if (!filled.length) break;
   }
 
-  // Blur pass over filled area only
-  const blurred=new Float32Array(working);
-  const BR=3;
-  for (let y=minY;y<=maxY;y++) for (let x=minX;x<=maxX;x++) {
-    const idx=y*W+x;
-    if (!needsFill[idx]) continue;
-    let rS=0,gS=0,bS=0,cnt=0;
-    for (let dy=-BR;dy<=BR;dy++) for (let dx=-BR;dx<=BR;dx++) {
-      if (dx*dx+dy*dy>BR*BR) continue;
-      const nx=x+dx,ny=y+dy;
-      if (nx<0||ny<0||nx>=W||ny>=H) continue;
-      const ni=ny*W+nx;
-      rS+=working[ni*3]; gS+=working[ni*3+1]; bS+=working[ni*3+2]; cnt++;
-    }
-    if (cnt) { blurred[idx*3]=rS/cnt; blurred[idx*3+1]=gS/cnt; blurred[idx*3+2]=bS/cnt; }
-  }
-
-  // Feather edge between filled and original
-  const FEATHER=4;
+  // No blur pass — keep the fill sharp and texture-faithful.
+  // Only a 1px hard-edge blend at the very boundary to avoid a visible seam.
+  const FEATHER=1;
   const out=new Uint8ClampedArray(src);
   for (let y=minY;y<=maxY;y++) for (let x=minX;x<=maxX;x++) {
     const idx=y*W+x;
     if (!needsFill[idx]) continue;
-    let edgeDist=FEATHER;
-    outer: for (let r=1;r<=FEATHER;r++) {
-      for (const [dx,dy] of [[-r,0],[r,0],[0,-r],[0,r]]) {
-        const nx=x+dx,ny=y+dy;
-        if (nx>=0&&ny>=0&&nx<W&&ny<H&&!needsFill[ny*W+nx]) { edgeDist=r; break outer; }
-      }
+    // Check if this pixel is exactly on the 1px border
+    let onEdge=false;
+    for (const [nx,ny] of [[x+1,y],[x-1,y],[x,y+1],[x,y-1]]) {
+      if (nx>=0&&ny>=0&&nx<W&&ny<H&&!needsFill[ny*W+nx]) { onEdge=true; break; }
     }
     const di=idx*4;
-    // Blend: at edge (edgeDist=1) keep mostly original; at interior keep filled
-    const t=edgeDist/FEATHER;
-    out[di]  =Math.round(blurred[idx*3]*t   + src[di]*(1-t));
-    out[di+1]=Math.round(blurred[idx*3+1]*t + src[di+1]*(1-t));
-    out[di+2]=Math.round(blurred[idx*3+2]*t + src[di+2]*(1-t));
+    if (onEdge) {
+      // 50/50 blend only at the immediate 1px border to soften the seam
+      out[di]  =Math.round((working[idx*3]  +src[di]  )/2);
+      out[di+1]=Math.round((working[idx*3+1]+src[di+1])/2);
+      out[di+2]=Math.round((working[idx*3+2]+src[di+2])/2);
+    } else {
+      out[di]  =Math.round(working[idx*3]);
+      out[di+1]=Math.round(working[idx*3+1]);
+      out[di+2]=Math.round(working[idx*3+2]);
+    }
     out[di+3]=255;
   }
 
@@ -494,11 +484,11 @@ resetButton?.addEventListener("click", () => {
   if (!imageLoaded||!pristineImageData) return;
   originalImageData=cloneImgData(pristineImageData);
   wallMask=new Uint8Array(originalImageData.width*originalImageData.height);
-  computeMajorAreaMask();
+  // Don't auto-apply magic select — restore raw image with blank mask
+  ctx.putImageData(originalImageData, 0, 0);
   presetButtons.forEach(b=>b.classList.remove("active"));
   historyStack=[]; redoStack=[];
   pushHistory();
-  applyCurrentColor();
 });
 
 // ── Save snapshot ─────────────────────────────────────────────────────────────
