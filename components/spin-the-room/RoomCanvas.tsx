@@ -1,13 +1,13 @@
 "use client"
 
 import { useRef } from "react"
-import type { FurnitureId, SlotId } from "@/lib/spin-the-room/data"
-import { FURNITURE, SLOTS } from "@/lib/spin-the-room/data"
-import { FurnitureItem } from "./FurnitureItem"
+import type { FurnitureId } from "@/lib/spin-the-room/data"
+import { FURNITURE } from "@/lib/spin-the-room/data"
+import { FurnitureItem, type FreePosition } from "./FurnitureItem"
 
 export type PlacedItem = {
   id: FurnitureId
-  slot: SlotId
+  position: FreePosition
   tintHex: string
   isFresh: boolean
 }
@@ -18,6 +18,8 @@ type Props = {
   placedItems: PlacedItem[]
   selectedId: FurnitureId | null
   onSelectItem: (id: FurnitureId) => void
+  onPositionChange: (id: FurnitureId, pos: Partial<FreePosition>) => void
+  onRemoveItem: (id: FurnitureId) => void
 }
 
 export function RoomCanvas({
@@ -26,8 +28,11 @@ export function RoomCanvas({
   placedItems,
   selectedId,
   onSelectItem,
+  onPositionChange,
+  onRemoveItem,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -58,21 +63,29 @@ export function RoomCanvas({
   }
 
   return (
-    <div className="relative aspect-[16/10] w-full overflow-hidden rounded-2xl border border-border bg-[#121212]">
+    <div
+      ref={containerRef}
+      className="relative aspect-[16/10] w-full overflow-hidden rounded-2xl border border-border bg-[#121212]"
+      onClick={() => onSelectItem(null as unknown as FurnitureId)}
+    >
       <img
         src={roomImageUrl}
         alt="Uploaded room"
         className="absolute inset-0 h-full w-full object-cover"
+        draggable={false}
       />
-      {placedItems.map(({ id, slot, tintHex, isFresh }) => (
+      {placedItems.map(({ id, position, tintHex, isFresh }) => (
         <FurnitureItem
           key={id}
           furniture={FURNITURE[id]}
-          placement={SLOTS[slot]}
+          position={position}
           tintHex={tintHex}
           animateIn={isFresh}
           isSelected={selectedId === id}
           onSelect={() => onSelectItem(id)}
+          onPositionChange={(pos) => onPositionChange(id, pos)}
+          onRemove={() => onRemoveItem(id)}
+          containerRef={containerRef}
         />
       ))}
     </div>

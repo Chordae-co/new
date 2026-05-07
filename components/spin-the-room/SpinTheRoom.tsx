@@ -8,23 +8,31 @@ import {
   MAX_SPINS,
   SLOT_LABEL,
   SLOT_ORDER,
+  SLOTS,
   assignSlots,
   pickSlotFor,
 } from "@/lib/spin-the-room/data"
+import type { FreePosition } from "./FurnitureItem"
 import { RoomCanvas, type PlacedItem } from "./RoomCanvas"
 import { SpinWheel } from "./SpinWheel"
 import { ColorPicker } from "./ColorPicker"
 import { ComboSetBrowser } from "./ComboSetBrowser"
 import { PieceActions } from "./PieceActions"
 
+function slotToFreePosition(slot: SlotId): FreePosition {
+  const s = SLOTS[slot]
+  return { xPercent: s.xPercent, yPercent: s.yPercent, widthPercent: s.widthPercent, zIndex: s.zIndex }
+}
+
 export function SpinTheRoom() {
   const [roomImageUrl, setRoomImageUrl] = useState<string | null>(null)
   const [placed, setPlaced] = useState<PlacedItem[]>([])
   const [selectedId, setSelectedId] = useState<FurnitureId | null>(null)
   const [spinsUsed, setSpinsUsed] = useState(0)
+  // Track which slots are in use so pickSlotFor still works for initial placement
+  const [occupiedSlots, setOccupiedSlots] = useState<Set<SlotId>>(new Set())
   const objectUrlRef = useRef<string | null>(null)
 
-  // Pre-load all furniture PNGs into the browser cache on mount.
   useEffect(() => {
     FURNITURE_ORDER.forEach((id) => {
       const img = new Image()
@@ -33,16 +41,10 @@ export function SpinTheRoom() {
   }, [])
 
   useEffect(() => {
-    return () => {
-      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
-    }
+    return () => { if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current) }
   }, [])
 
   const usedIds = useMemo(() => new Set(placed.map((p) => p.id)), [placed])
-  const occupiedSlots = useMemo<Set<SlotId>>(
-    () => new Set(placed.map((p) => p.slot)),
-    [placed],
-  )
   const spinsLeft = Math.max(0, MAX_SPINS - spinsUsed)
 
   const handleUpload = (file: File) => {
@@ -55,12 +57,12 @@ export function SpinTheRoom() {
   const handleLanded = (id: FurnitureId) => {
     setPlaced((prev) => {
       if (prev.some((p) => p.id === id)) return prev
-      const occupied = new Set(prev.map((p) => p.slot))
-      const slot = pickSlotFor(id, occupied)
+      const slot = pickSlotFor(id, occupiedSlots)
       if (!slot) return prev
+      setOccupiedSlots((s) => new Set([...s, slot]))
       return [
         ...prev.map((p) => ({ ...p, isFresh: false })),
-        { id, slot, tintHex: "", isFresh: true },
+        { id, position: slotToFreePosition(slot), tintHex: "", isFresh: true },
       ]
     })
     setSpinsUsed((n) => n + 1)
@@ -71,6 +73,7 @@ export function SpinTheRoom() {
     setPlaced([])
     setSpinsUsed(0)
     setSelectedId(null)
+    setOccupiedSlots(new Set())
   }
 
   const handleSelectItem = (id: FurnitureId) => {
@@ -84,10 +87,23 @@ export function SpinTheRoom() {
     )
   }
 
+  const handlePositionChange = (id: FurnitureId, pos: Partial<FreePosition>) => {
+    setPlaced((prev) =>
+      prev.map((p) => p.id === id ? { ...p, position: { ...p.position, ...pos }, isFresh: false } : p)
+    )
+  }
+
+  const handleRemoveItem = (id: FurnitureId) => {
+    setPlaced((prev) => prev.filter((p) => p.id !== id))
+    if (selectedId === id) setSelectedId(null)
+  }
+
   const handleMoveSlot = (slot: SlotId) => {
     if (!selectedId) return
     setPlaced((prev) =>
-      prev.map((p) => (p.id === selectedId ? { ...p, slot, isFresh: true } : p)),
+      prev.map((p) =>
+        p.id === selectedId ? { ...p, position: slotToFreePosition(slot), isFresh: true } : p
+      ),
     )
   }
 
@@ -96,12 +112,8 @@ export function SpinTheRoom() {
     setPlaced((prev) => {
       const current = prev.find((p) => p.id === selectedId)
       if (!current) return prev
-      // Swap keeps the slot but switches the piece. Reset tint since the new
-      // piece has a different color category.
       return prev.map((p) =>
-        p.id === selectedId
-          ? { id: newId, slot: current.slot, tintHex: "", isFresh: true }
-          : p,
+        p.id === selectedId ? { id: newId, position: current.position, tintHex: "", isFresh: true } : p,
       )
     })
     setSelectedId(newId)
@@ -109,16 +121,17 @@ export function SpinTheRoom() {
 
   const handleRemove = () => {
     if (!selectedId) return
-    setPlaced((prev) => prev.filter((p) => p.id !== selectedId))
-    setSelectedId(null)
+    handleRemoveItem(selectedId)
   }
 
   const handlePickCombo = (combo: ComboSet) => {
     const assignments = assignSlots(combo.items)
+    const newSlots = new Set<SlotId>(assignments.map((a) => a.slot))
+    setOccupiedSlots(newSlots)
     setPlaced(
       assignments.map(({ id, slot }, i) => ({
         id,
-        slot,
+        position: slotToFreePosition(slot),
         tintHex: "",
         isFresh: i === assignments.length - 1,
       })),
@@ -132,16 +145,8 @@ export function SpinTheRoom() {
   const selectedPlaced = selectedId ? placed.find((p) => p.id === selectedId) : null
   const wheelDisabled = !roomImageUrl
 
-  // Compute available "Move to" slots for the selected piece: slots that are
-  // free OR the slot the piece already occupies (so we can show it as active).
-  const availableMoveSlots: SlotId[] = useMemo(() => {
-    if (!selectedPlaced) return []
-    return SLOT_ORDER.filter(
-      (s) => !occupiedSlots.has(s) || s === selectedPlaced.slot,
-    )
-  }, [selectedPlaced, occupiedSlots])
+  const availableMoveSlots: SlotId[] = SLOT_ORDER
 
-  // Unused furniture for "Swap with"
   const swapCandidates: FurnitureId[] = useMemo(
     () => FURNITURE_ORDER.filter((id) => !usedIds.has(id)),
     [usedIds],
@@ -156,6 +161,8 @@ export function SpinTheRoom() {
           placedItems={placed}
           selectedId={selectedId}
           onSelectItem={handleSelectItem}
+          onPositionChange={handlePositionChange}
+          onRemoveItem={handleRemoveItem}
         />
 
         <div className="flex flex-col gap-4 rounded-2xl border border-border bg-card/40 p-5">
@@ -196,7 +203,7 @@ export function SpinTheRoom() {
             onChange={handleTintChange}
           />
           <PieceActions
-            currentSlot={selectedPlaced.slot}
+            currentSlot={"center" as SlotId}
             availableSlots={availableMoveSlots}
             slotLabel={SLOT_LABEL}
             swapCandidates={swapCandidates}
@@ -207,7 +214,7 @@ export function SpinTheRoom() {
         </div>
       ) : placed.length > 0 ? (
         <p className="rounded-2xl border border-dashed border-border bg-card/40 p-4 text-center text-xs text-muted-foreground">
-          Tap any placed piece to recolor, move, swap, or remove it.
+          Tap a piece to select it — then drag to move, pull the side handles to resize, or tap × to remove.
         </p>
       ) : null}
 
