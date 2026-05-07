@@ -14,86 +14,70 @@ const savedGallery = document.getElementById("savedGallery");
 const snapshotPreviewWrapper = document.getElementById("snapshotPreviewWrapper");
 const snapshotPreview = document.getElementById("snapshotPreview");
 
-const toolWandBtn = document.getElementById("toolWand");
-const toolPaintBtn = document.getElementById("toolPaint");
+const toolWandBtn   = document.getElementById("toolWand");
+const toolPaintBtn  = document.getElementById("toolPaint");
 const toolEraserBtn = document.getElementById("toolEraser");
-const wandRange = document.getElementById("wandRange");
-const paintRange = document.getElementById("paintRange");
-const eraserRange = document.getElementById("eraserRange");
+const toolLassoBtn  = document.getElementById("toolLasso");
+const wandRange     = document.getElementById("wandRange");
+const paintRange    = document.getElementById("paintRange");
+const eraserRange   = document.getElementById("eraserRange");
+const undoBtn       = document.getElementById("undoBtn");
+const redoBtn       = document.getElementById("redoBtn");
 
-const undoBtn = document.getElementById("undoBtn");
-const redoBtn = document.getElementById("redoBtn");
+// All tool buttons in one list for easy active-state management
+const ALL_TOOL_BTNS = [toolWandBtn, toolPaintBtn, toolEraserBtn, toolLassoBtn].filter(Boolean);
 
 let originalImageData = null;
 let imageLoaded = false;
-let wallMask = null; // 1 = wall/major area
-let toolMode = "wand"; // "wand" | "paint" | "eraser"
-let isDrawing = false;
+let wallMask    = null;
+// "wand" | "paint" | "eraser" | "lasso"
+let toolMode    = "wand";
+let isDrawing   = false;
 
 let wandTolerance = parseInt(wandRange.value, 10) || 45;
-let paintRadius = parseInt(paintRange.value, 10) || 10;
-let eraserRadius = parseInt(eraserRange.value, 10) || 10;
+let paintRadius   = parseInt(paintRange.value, 10) || 10;
+let eraserRadius  = parseInt(eraserRange.value, 10) || 10;
 
-// Undo/redo stacks
 let historyStack = [];
-let redoStack = [];
+let redoStack    = [];
 
-// ---- History helpers ----
+// ── History ──────────────────────────────────────────────────────────────────
 function pushHistory() {
   if (!imageLoaded || !originalImageData || !wallMask) return;
-  const snapshot = {
-    mask: wallMask.slice(),
-    color: colorPicker.value
-  };
-  historyStack.push(snapshot);
-  if (historyStack.length > 50) {
-    historyStack.shift();
-  }
+  historyStack.push({ imgData: new ImageData(new Uint8ClampedArray(originalImageData.data), originalImageData.width, originalImageData.height), mask: wallMask.slice(), color: colorPicker.value });
+  if (historyStack.length > 50) historyStack.shift();
   redoStack = [];
 }
 
 function restoreState(state) {
   if (!state) return;
+  originalImageData = new ImageData(new Uint8ClampedArray(state.imgData.data), state.imgData.width, state.imgData.height);
   wallMask = state.mask.slice();
   colorPicker.value = state.color;
-  // restore preset active state if any
-  presetButtons.forEach((btn) => {
-    const c = btn.getAttribute("data-color");
-    btn.classList.toggle("active", colorToHex(c) === colorPicker.value);
-  });
+  presetButtons.forEach(btn => btn.classList.toggle("active", btn.getAttribute("data-color") === colorPicker.value));
   applyCurrentColor();
 }
 
-// ---- Load image ----
+// ── Load image ────────────────────────────────────────────────────────────────
 imageInput.addEventListener("change", (event) => {
   const file = event.target.files?.[0];
   if (!file) return;
-
   const reader = new FileReader();
   reader.onload = () => {
     const img = new Image();
     img.onload = () => {
-      const maxWidth = 900;
-      const maxHeight = 500;
-      let width = img.width;
-      let height = img.height;
-      const ratio = Math.min(maxWidth / width, maxHeight / height, 1);
-      width = Math.round(width * ratio);
-      height = Math.round(height * ratio);
-
-      canvas.width = width;
-      canvas.height = height;
-      ctx.drawImage(img, 0, 0, width, height);
-
-      originalImageData = ctx.getImageData(0, 0, width, height);
-      wallMask = new Uint8Array(width * height);
+      const maxWidth = 900, maxHeight = 500;
+      let w = img.width, h = img.height;
+      const ratio = Math.min(maxWidth / w, maxHeight / h, 1);
+      w = Math.round(w * ratio); h = Math.round(h * ratio);
+      canvas.width = w; canvas.height = h;
+      ctx.drawImage(img, 0, 0, w, h);
+      originalImageData = ctx.getImageData(0, 0, w, h);
+      wallMask = new Uint8Array(w * h);
       imageLoaded = true;
-      historyStack = [];
-      redoStack = [];
-
+      historyStack = []; redoStack = [];
       canvas.style.display = "block";
       placeholder.style.display = "none";
-
       computeMajorAreaMask();
       applyCurrentColor();
       pushHistory();
@@ -103,716 +87,514 @@ imageInput.addEventListener("change", (event) => {
   reader.readAsDataURL(file);
 });
 
-// ---- Object / wall detection: average color + smoothness + component filtering ----
+// ── Wall detection ────────────────────────────────────────────────────────────
 function computeMajorAreaMask() {
   if (!originalImageData) return;
-  const width = originalImageData.width;
-  const height = originalImageData.height;
-  const data = originalImageData.data;
-
+  const { width: W, height: H, data } = originalImageData;
   let sumR = 0, sumG = 0, sumB = 0, count = 0;
   const step = 4;
-
-  for (let y = step; y < height - step; y += step) {
-    for (let x = step; x < width - step; x += step) {
-      const idx = (y * width + x) * 4;
-      const r = data[idx];
-      const g = data[idx + 1];
-      const b = data[idx + 2];
-
-      const brightness = 0.299 * r + 0.587 * g + 0.114 * b;
-      if (brightness < 30 || brightness > 245) continue; // skip extremes
-      sumR += r;
-      sumG += g;
-      sumB += b;
-      count++;
+  for (let y = step; y < H - step; y += step) {
+    for (let x = step; x < W - step; x += step) {
+      const i = (y * W + x) * 4;
+      const br = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2];
+      if (br < 30 || br > 245) continue;
+      sumR += data[i]; sumG += data[i+1]; sumB += data[i+2]; count++;
     }
   }
-
-  if (count === 0) {
-    wallMask.fill(0);
-    return;
-  }
-
-  const avgR = sumR / count;
-  const avgG = sumG / count;
-  const avgB = sumB / count;
-
-  const threshold = 70;        // color distance from major tone
-  const varianceLimit = 35;    // local smoothness: lower = fewer objects/edges
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idxPix = y * width + x;
-      const di = idxPix * 4;
-      const r = data[di];
-      const g = data[di + 1];
-      const b = data[di + 2];
-
-      const dr = r - avgR;
-      const dg = g - avgG;
-      const db = b - avgB;
-      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-
-      if (dist > threshold) {
-        wallMask[idxPix] = 0;
-        continue;
+  if (count === 0) { wallMask.fill(0); return; }
+  const avgR = sumR/count, avgG = sumG/count, avgB = sumB/count;
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const idx = y * W + x, di = idx * 4;
+      const dr = data[di]-avgR, dg = data[di+1]-avgG, db = data[di+2]-avgB;
+      if (Math.sqrt(dr*dr+dg*dg+db*db) > 70) { wallMask[idx] = 0; continue; }
+      let nSum = 0, nCnt = 0;
+      for (let ny = y-1; ny <= y+1; ny++) for (let nx = x-1; nx <= x+1; nx++) {
+        if (nx<0||ny<0||nx>=W||ny>=H||nx===x&&ny===y) continue;
+        const ni = (ny*W+nx)*4;
+        const a=data[ni]-data[di], b=data[ni+1]-data[di+1], c=data[ni+2]-data[di+2];
+        nSum += Math.sqrt(a*a+b*b+c*c); nCnt++;
       }
-
-      // Local variance: compare to neighbors; high variance => likely object/edge, not flat wall
-      let neighborCount = 0;
-      let neighborDistSum = 0;
-      for (let ny = y - 1; ny <= y + 1; ny++) {
-        for (let nx = x - 1; nx <= x + 1; nx++) {
-          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-          if (nx === x && ny === y) continue;
-          const ni = (ny * width + nx) * 4;
-          const nr = data[ni];
-          const ng = data[ni + 1];
-          const nb = data[ni + 2];
-          const drr = nr - r;
-          const dgg = ng - g;
-          const dbb = nb - b;
-          const nd = Math.sqrt(drr * drr + dgg * dgg + dbb * dbb);
-          neighborDistSum += nd;
-          neighborCount++;
-        }
-      }
-      const neighborAvgDist = neighborCount ? neighborDistSum / neighborCount : 0;
-
-      wallMask[idxPix] = neighborAvgDist < varianceLimit ? 1 : 0;
+      wallMask[idx] = (nCnt ? nSum/nCnt : 0) < 35 ? 1 : 0;
     }
   }
-
-  smoothMask(width, height);
-  filterSmallComponents(width, height);
+  smoothMask(W, H);
+  filterSmallComponents(W, H);
 }
 
-// Morphological smoothing using neighbor voting
-function smoothMask(width, height) {
-  const newMask = new Uint8Array(width * height);
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
-      if (wallMask[idx]) {
-        newMask[idx] = 1;
-        continue;
-      }
-      let neighborCount = 0;
-      for (let ny = y - 1; ny <= y + 1; ny++) {
-        for (let nx = x - 1; nx <= x + 1; nx++) {
-          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-          if (wallMask[ny * width + nx]) neighborCount++;
-        }
-      }
-      if (neighborCount >= 5) newMask[idx] = 1;
+function smoothMask(W, H) {
+  const n = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const idx = y*W+x;
+    if (wallMask[idx]) { n[idx] = 1; continue; }
+    let cnt = 0;
+    for (let ny=y-1;ny<=y+1;ny++) for (let nx=x-1;nx<=x+1;nx++) {
+      if (nx<0||ny<0||nx>=W||ny>=H) continue;
+      if (wallMask[ny*W+nx]) cnt++;
     }
+    if (cnt >= 5) n[idx] = 1;
   }
-  wallMask = newMask;
+  wallMask = n;
 }
 
-// Second layer: remove small isolated regions (likely objects) and keep big wall blobs
-function filterSmallComponents(width, height) {
-  const visited = new Uint8Array(width * height);
-  const labels = new Int32Array(width * height);
-  labels.fill(-1);
-  const areas = [];
-  let compIndex = 0;
-
-  const neighbors = [
-    [1, 0], [-1, 0], [0, 1], [0, -1]
-  ];
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idx = y * width + x;
-      if (!wallMask[idx] || visited[idx]) continue;
-
-      let queue = [[x, y]];
-      visited[idx] = 1;
-      labels[idx] = compIndex;
-      let area = 0;
-
-      while (queue.length > 0) {
-        const [cx, cy] = queue.pop();
-        const cidx = cy * width + cx;
-        area++;
-
-        for (const [dx, dy] of neighbors) {
-          const nx = cx + dx;
-          const ny = cy + dy;
-          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-          const nidx = ny * width + nx;
-          if (!wallMask[nidx] || visited[nidx]) continue;
-          visited[nidx] = 1;
-          labels[nidx] = compIndex;
-          queue.push([nx, ny]);
-        }
+function filterSmallComponents(W, H) {
+  const visited = new Uint8Array(W * H);
+  const labels  = new Int32Array(W * H).fill(-1);
+  const areas   = [];
+  let ci = 0;
+  const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const idx = y*W+x;
+    if (!wallMask[idx] || visited[idx]) continue;
+    let q = [[x,y]], area = 0;
+    visited[idx] = 1; labels[idx] = ci;
+    while (q.length) {
+      const [cx,cy] = q.pop(); area++;
+      for (const [dx,dy] of dirs) {
+        const nx=cx+dx, ny=cy+dy;
+        if (nx<0||ny<0||nx>=W||ny>=H) continue;
+        const ni = ny*W+nx;
+        if (!wallMask[ni]||visited[ni]) continue;
+        visited[ni]=1; labels[ni]=ci; q.push([nx,ny]);
       }
-
-      areas[compIndex] = area;
-      compIndex++;
     }
+    areas[ci++] = area;
   }
-
-  if (areas.length === 0) return;
-
-  let maxArea = 0;
-  for (let i = 0; i < areas.length; i++) {
-    if (areas[i] > maxArea) maxArea = areas[i];
-  }
-
-  const minArea = maxArea * 0.25; // keep only regions that are at least 25% of largest blob
-
+  if (!areas.length) return;
+  const maxArea = Math.max(...areas);
+  const minArea = maxArea * 0.25;
   for (let i = 0; i < wallMask.length; i++) {
-    const label = labels[i];
-    if (label === -1) continue;
-    if (areas[label] < minArea) {
-      wallMask[i] = 0;
-    }
+    if (labels[i] !== -1 && areas[labels[i]] < minArea) wallMask[i] = 0;
   }
 }
 
-// ---- Apply tint using mask (wall only) ----
+// ── Apply tint ────────────────────────────────────────────────────────────────
 function applyCurrentColor() {
   if (!imageLoaded || !originalImageData) return;
-
-  const hex = colorPicker.value || "#ffffff";
-  const { r: tr, g: tg, b: tb } = hexToRgb(hex);
-
-  const width = originalImageData.width;
-  const height = originalImageData.height;
-
-  const origData = originalImageData.data;
+  const { r: tr, g: tg, b: tb } = hexToRgb(colorPicker.value || "#ffffff");
+  const { width: W, height: H, data: src } = originalImageData;
   const out = ctx.createImageData(originalImageData);
-  const outData = out.data;
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const idxPix = y * width + x;
-      const di = idxPix * 4;
-
-      const r = origData[di];
-      const g = origData[di + 1];
-      const b = origData[di + 2];
-      const a = origData[di + 3];
-
-      if (wallMask && wallMask[idxPix]) {
-        const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-        outData[di]     = Math.min(255, tr * brightness);
-        outData[di + 1] = Math.min(255, tg * brightness);
-        outData[di + 2] = Math.min(255, tb * brightness);
-        outData[di + 3] = a;
-      } else {
-        outData[di]     = r;
-        outData[di + 1] = g;
-        outData[di + 2] = b;
-        outData[di + 3] = a;
-      }
+  const d = out.data;
+  for (let i = 0; i < W * H; i++) {
+    const di = i * 4;
+    if (wallMask && wallMask[i]) {
+      const br = (0.299*src[di] + 0.587*src[di+1] + 0.114*src[di+2]) / 255;
+      d[di]   = Math.min(255, tr * br);
+      d[di+1] = Math.min(255, tg * br);
+      d[di+2] = Math.min(255, tb * br);
+      d[di+3] = src[di+3];
+    } else {
+      d[di]=src[di]; d[di+1]=src[di+1]; d[di+2]=src[di+2]; d[di+3]=src[di+3];
     }
   }
-
   ctx.putImageData(out, 0, 0);
 }
 
-// ---- Tools: Magic select, Paint brush, Eraser ----
-function getCanvasCoords(event) {
+// ── Coordinate helpers ────────────────────────────────────────────────────────
+function getCanvasCoords(e) {
   const rect = canvas.getBoundingClientRect();
-  const x = Math.floor(((event.clientX - rect.left) / rect.width) * canvas.width);
-  const y = Math.floor(((event.clientY - rect.top) / rect.height) * canvas.height);
-  return { x, y };
+  const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+  const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+  return {
+    x: Math.floor(((clientX - rect.left) / rect.width)  * canvas.width),
+    y: Math.floor(((clientY - rect.top)  / rect.height) * canvas.height),
+  };
 }
 
-// Magic select: always adds a region to the wall, never erases
-canvas.addEventListener("click", (event) => {
-  if (!imageLoaded || !wallMask || !originalImageData) return;
-  if (toolMode !== "wand") return;
-
-  pushHistory();
-  const { x, y } = getCanvasCoords(event);
-  addRegionAt(x, y);
-  applyCurrentColor();
-});
-
+// ── Wand ──────────────────────────────────────────────────────────────────────
 function addRegionAt(startX, startY) {
-  const width = originalImageData.width;
-  const height = originalImageData.height;
-  const data = originalImageData.data;
-
-  const startIdx = (startY * width + startX) * 4;
-  const baseR = data[startIdx];
-  const baseG = data[startIdx + 1];
-  const baseB = data[startIdx + 2];
-
-  const tolerance = wandTolerance; // controlled by slider
-  const visited = new Uint8Array(width * height);
+  const { width: W, height: H, data } = originalImageData;
+  const si = (startY * W + startX) * 4;
+  const [baseR, baseG, baseB] = [data[si], data[si+1], data[si+2]];
+  const visited = new Uint8Array(W * H);
   const stack = [[startX, startY]];
-  visited[startY * width + startX] = 1;
-
-  while (stack.length > 0) {
+  visited[startY * W + startX] = 1;
+  while (stack.length) {
     const [x, y] = stack.pop();
-    const idxPix = y * width + x;
-    wallMask[idxPix] = 1; // always painting/add
-
-    const neighbors = [
-      [x + 1, y],
-      [x - 1, y],
-      [x, y + 1],
-      [x, y - 1]
-    ];
-    for (const [nx, ny] of neighbors) {
-      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-      const nIdxPix = ny * width + nx;
-      if (visited[nIdxPix]) continue;
-
-      const di = nIdxPix * 4;
-      const r = data[di];
-      const g = data[di + 1];
-      const b = data[di + 2];
-      const dr = r - baseR;
-      const dg = g - baseG;
-      const db = b - baseB;
-      const dist = Math.sqrt(dr * dr + dg * dg + db * db);
-
-      if (dist < tolerance) {
-        visited[nIdxPix] = 1;
-        stack.push([nx, ny]);
-      }
+    wallMask[y * W + x] = 1;
+    for (const [nx, ny] of [[x+1,y],[x-1,y],[x,y+1],[x,y-1]]) {
+      if (nx<0||ny<0||nx>=W||ny>=H) continue;
+      const ni = ny*W+nx;
+      if (visited[ni]) continue;
+      const di = ni*4;
+      const dr=data[di]-baseR, dg=data[di+1]-baseG, db=data[di+2]-baseB;
+      if (Math.sqrt(dr*dr+dg*dg+db*db) < wandTolerance) { visited[ni]=1; stack.push([nx,ny]); }
     }
   }
 }
 
-// Paint/Eraser: click & drag to modify mask in a brush radius
-canvas.addEventListener("mousedown", (event) => {
-  if (!imageLoaded || !wallMask || !originalImageData) return;
-  if (toolMode !== "paint" && toolMode !== "eraser") return;
-
-  isDrawing = true;
-  pushHistory();
-  const { x, y } = getCanvasCoords(event);
-
-  if (toolMode === "paint") {
-    paintAt(x, y);
-  } else if (toolMode === "eraser") {
-    eraseAt(x, y);
-  }
-  applyCurrentColor();
-});
-
-canvas.addEventListener("mousemove", (event) => {
-  if (!isDrawing) return;
-  if (!imageLoaded || !wallMask || !originalImageData) return;
-  if (toolMode !== "paint" && toolMode !== "eraser") return;
-
-  const { x, y } = getCanvasCoords(event);
-  if (toolMode === "paint") {
-    paintAt(x, y);
-  } else if (toolMode === "eraser") {
-    eraseAt(x, y);
-  }
-  applyCurrentColor();
-});
-
-window.addEventListener("mouseup", () => {
-  isDrawing = false;
-});
-
-function paintAt(cx, cy) {
-  const width = originalImageData.width;
-  const height = originalImageData.height;
-  const r = paintRadius;
-
-  for (let y = cy - r; y <= cy + r; y++) {
-    for (let x = cx - r; x <= cx + r; x++) {
-      if (x < 0 || y < 0 || x >= width || y >= height) continue;
-      const dx = x - cx;
-      const dy = y - cy;
-      if (dx * dx + dy * dy > r * r) continue;
-      const idxPix = y * width + x;
-      wallMask[idxPix] = 1;
-    }
+// ── Paint / Eraser ────────────────────────────────────────────────────────────
+function paintAt(cx, cy, val) {
+  const { width: W, height: H } = originalImageData;
+  const r = val === 1 ? paintRadius : eraserRadius;
+  for (let y=cy-r; y<=cy+r; y++) for (let x=cx-r; x<=cx+r; x++) {
+    if (x<0||y<0||x>=W||y>=H) continue;
+    if ((x-cx)**2 + (y-cy)**2 <= r*r) wallMask[y*W+x] = val;
   }
 }
 
-function eraseAt(cx, cy) {
-  const width = originalImageData.width;
-  const height = originalImageData.height;
-  const r = eraserRadius;
+// ── Lasso state ───────────────────────────────────────────────────────────────
+let lassoDrawing = false;
+let lassoPoints  = [];
+let lassoAnimId  = null;
 
-  for (let y = cy - r; y <= cy + r; y++) {
-    for (let x = cx - r; x <= cx + r; x++) {
-      if (x < 0 || y < 0 || x >= width || y >= height) continue;
-      const dx = x - cx;
-      const dy = y - cy;
-      if (dx * dx + dy * dy > r * r) continue;
-      const idxPix = y * width + x;
-      wallMask[idxPix] = 0;
-    }
-  }
-}
-
-// Tool mode buttons
-toolWandBtn.addEventListener("click", () => {
-  toolMode = "wand";
-  toolWandBtn.classList.add("active");
-  toolPaintBtn.classList.remove("active");
-  toolEraserBtn.classList.remove("active");
-});
-
-toolPaintBtn.addEventListener("click", () => {
-  toolMode = "paint";
-  toolPaintBtn.classList.add("active");
-  toolWandBtn.classList.remove("active");
-  toolEraserBtn.classList.remove("active");
-});
-
-toolEraserBtn.addEventListener("click", () => {
-  toolMode = "eraser";
-  toolEraserBtn.classList.add("active");
-  toolWandBtn.classList.remove("active");
-  toolPaintBtn.classList.remove("active");
-});
-
-// Sliders
-wandRange.addEventListener("input", () => {
-  wandTolerance = parseInt(wandRange.value, 10) || 45;
-});
-
-paintRange.addEventListener("input", () => {
-  paintRadius = parseInt(paintRange.value, 10) || 10;
-});
-
-eraserRange.addEventListener("input", () => {
-  eraserRadius = parseInt(eraserRange.value, 10) || 10;
-});
-
-// ---- Undo/Redo ----
-undoBtn.addEventListener("click", () => {
-  if (!imageLoaded) return;
-  if (historyStack.length === 0) return;
-  const currentState = {
-    mask: wallMask.slice(),
-    color: colorPicker.value
-  };
-  const prevState = historyStack.pop();
-  redoStack.push(currentState);
-  restoreState(prevState);
-});
-
-redoBtn.addEventListener("click", () => {
-  if (!imageLoaded) return;
-  if (redoStack.length === 0) return;
-  const currentState = {
-    mask: wallMask.slice(),
-    color: colorPicker.value
-  };
-  const nextState = redoStack.pop();
-  historyStack.push(currentState);
-  restoreState(nextState);
-});
-
-// ---- Reset to original photo (no tint, fresh mask) ----
-resetButton.addEventListener("click", () => {
-  if (!imageLoaded || !originalImageData) return;
-  ctx.putImageData(originalImageData, 0, 0);
-  if (wallMask) wallMask.fill(0);
-  computeMajorAreaMask(); // rebuild from original
-  presetButtons.forEach((b) => b.classList.remove("active"));
-  historyStack = [];
-  redoStack = [];
-  pushHistory();
-});
-
-// ---- Save current canvas as snapshot thumbnail (inline preview) ----
-saveButton.addEventListener("click", () => {
-  if (!imageLoaded) return;
-  const dataUrl = canvas.toDataURL("image/png");
-  const img = document.createElement("img");
-  img.src = dataUrl;
-  img.className = "saved-thumb";
-
-  img.addEventListener("click", () => {
-    snapshotPreview.src = dataUrl;
-    snapshotPreviewWrapper.style.display = "block";
-  });
-
-  const placeholderEl = savedGallery.querySelector(".gallery-placeholder");
-  if (placeholderEl) placeholderEl.remove();
-
-  savedGallery.appendChild(img);
-});
-
-// ---- Color picker and presets ----
-colorPicker.addEventListener("change", () => {
-  pushHistory();
-  applyCurrentColor();
-});
-
-colorPicker.addEventListener("input", () => {
-  applyCurrentColor();
-});
-
-presetButtons.forEach((btn) => {
-  btn.addEventListener("click", () => {
-    pushHistory();
-    const color = btn.getAttribute("data-color");
-    colorPicker.value = colorToHex(color);
-    presetButtons.forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    applyCurrentColor();
-  });
-});
-
-// ---- Helpers ----
-function hexToRgb(hex) {
-  let h = hex.replace("#", "");
-  if (h.length === 3) {
-    h = h.split("").map((c) => c + c).join("");
-  }
-  const num = parseInt(h, 16);
-  return {
-    r: (num >> 16) & 255,
-    g: (num >> 8) & 255,
-    b: num & 255
-  };
-}
-
-function colorToHex(color) {
-  return color.startsWith("#") ? color : color;
-}
-
-// ============================================================
-// LASSO ERASE TOOL
-// Draws directly on the main canvas — no overlay needed.
-// ============================================================
-
-const toolLassoBtn = document.getElementById("toolLasso");
-
-let lassoActive  = false;   // true while lasso tool is selected
-let lassoDrawing = false;   // true while mouse is held down
-let lassoPoints  = [];      // pixel-space points [{x,y}] on the main canvas
-
-// Convert a mouse/touch event to pixel coordinates on the main canvas element
-function getLassoCanvasCoords(event) {
-  const rect = canvas.getBoundingClientRect();
-  const clientX = event.touches ? event.touches[0].clientX : event.clientX;
-  const clientY = event.touches ? event.touches[0].clientY : event.clientY;
-  return {
-    x: Math.round(((clientX - rect.left) / rect.width)  * canvas.width),
-    y: Math.round(((clientY - rect.top)  / rect.height) * canvas.height),
-  };
-}
-
-// Redraw the current frame: original tinted image + lasso path on top
-function drawLassoFrame() {
-  if (!imageLoaded) return;
-
-  // Re-render the tinted image first
-  applyCurrentColor();
-
+function drawLassoOverlay() {
+  applyCurrentColor(); // draw base image
   if (lassoPoints.length < 2) return;
-
-  // Draw lasso path on top
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(lassoPoints[0].x, lassoPoints[0].y);
-  for (let i = 1; i < lassoPoints.length; i++) {
-    ctx.lineTo(lassoPoints[i].x, lassoPoints[i].y);
-  }
+  for (let i = 1; i < lassoPoints.length; i++) ctx.lineTo(lassoPoints[i].x, lassoPoints[i].y);
   ctx.closePath();
-
-  ctx.fillStyle = "rgba(255, 60, 60, 0.15)";
+  ctx.fillStyle = "rgba(255,60,60,0.15)";
   ctx.fill();
-
   ctx.strokeStyle = "#ff3333";
-  ctx.lineWidth = Math.max(1, canvas.width / 500); // scale with canvas size
-  ctx.setLineDash([6, 4]);
+  ctx.lineWidth = Math.max(1.5, canvas.width / 600);
+  ctx.setLineDash([7, 5]);
+  ctx.lineDashOffset = -(Date.now() / 30) % 12;
   ctx.stroke();
   ctx.setLineDash([]);
   ctx.restore();
 }
 
-// Marching-ants animation while drawing
-let lassoAnimId = null;
 function startLassoAnim() {
-  function tick() {
-    drawLassoFrame();
-    lassoAnimId = requestAnimationFrame(tick);
-  }
   cancelAnimationFrame(lassoAnimId);
+  function tick() { drawLassoOverlay(); lassoAnimId = requestAnimationFrame(tick); }
   lassoAnimId = requestAnimationFrame(tick);
 }
+
 function stopLassoAnim() {
   cancelAnimationFrame(lassoAnimId);
   lassoAnimId = null;
-  // Restore clean render without the lasso path
-  applyCurrentColor();
 }
 
-// ---- Pointer event handlers on the main canvas ----
-function onLassoMouseDown(e) {
-  if (!lassoActive || !imageLoaded) return;
-  e.preventDefault();
-  e.stopPropagation();
-  lassoDrawing = true;
-  lassoPoints  = [getLassoCanvasCoords(e)];
-  startLassoAnim();
-}
-
-function onLassoMouseMove(e) {
-  if (!lassoDrawing || !lassoActive) return;
-  e.preventDefault();
-  lassoPoints.push(getLassoCanvasCoords(e));
-}
-
-function onLassoMouseUp(e) {
-  if (!lassoDrawing || !lassoActive) return;
-  lassoDrawing = false;
-  stopLassoAnim();
-
-  if (lassoPoints.length < 3) { lassoPoints = []; return; }
-
-  pushHistory();
-  applyLassoErase(lassoPoints);
-  lassoPoints = [];
-}
-
-canvas.addEventListener("mousedown",  onLassoMouseDown);
-canvas.addEventListener("touchstart", onLassoMouseDown, { passive: false });
-canvas.addEventListener("mousemove",  onLassoMouseMove);
-canvas.addEventListener("touchmove",  onLassoMouseMove, { passive: false });
-canvas.addEventListener("mouseup",    onLassoMouseUp);
-canvas.addEventListener("touchend",   onLassoMouseUp);
-
-// ---- Point-in-polygon (ray casting) ----
+// ── Point-in-polygon ──────────────────────────────────────────────────────────
 function pointInPolygon(px, py, poly) {
   let inside = false;
-  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-    const xi = poly[i].x, yi = poly[i].y;
-    const xj = poly[j].x, yj = poly[j].y;
-    const intersect = ((yi > py) !== (yj > py)) &&
-      (px < (xj - xi) * (py - yi) / (yj - yi) + xi);
-    if (intersect) inside = !inside;
+  for (let i = 0, j = poly.length-1; i < poly.length; j = i++) {
+    const xi=poly[i].x, yi=poly[i].y, xj=poly[j].x, yj=poly[j].y;
+    if (((yi>py) !== (yj>py)) && (px < (xj-xi)*(py-yi)/(yj-yi)+xi)) inside = !inside;
   }
   return inside;
 }
 
-// ---- Inpainting: onion-layer patch fill ----
+// ── Inpainting ────────────────────────────────────────────────────────────────
+// Multi-scale patch-based fill: works at a coarser scale first (faster, smoother
+// background reconstruction) then refines at full resolution.
 function applyLassoErase(poly) {
   if (!originalImageData) return;
+  const W = originalImageData.width, H = originalImageData.height;
 
-  const w = originalImageData.width;
-  const h = originalImageData.height;
-  const srcData = originalImageData.data;
-
-  // Bounding box
-  let minX = w, maxX = 0, minY = h, maxY = 0;
+  // 1. Build mask
+  let minX=W, maxX=0, minY=H, maxY=0;
   for (const p of poly) {
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.y > maxY) maxY = p.y;
+    minX=Math.min(minX,p.x); maxX=Math.max(maxX,p.x);
+    minY=Math.min(minY,p.y); maxY=Math.max(maxY,p.y);
   }
-  minX = Math.max(0, minX - 1);
-  minY = Math.max(0, minY - 1);
-  maxX = Math.min(w - 1, maxX + 1);
-  maxY = Math.min(h - 1, maxY + 1);
+  minX=Math.max(0,minX-2); minY=Math.max(0,minY-2);
+  maxX=Math.min(W-1,maxX+2); maxY=Math.min(H-1,maxY+2);
 
-  // Mark pixels inside lasso
-  const needsFill = new Uint8Array(w * h);
-  for (let y = minY; y <= maxY; y++) {
-    for (let x = minX; x <= maxX; x++) {
-      if (pointInPolygon(x, y, poly)) {
-        needsFill[y * w + x] = 1;
-      }
+  const needsFill = new Uint8Array(W * H);
+  for (let y=minY; y<=maxY; y++)
+    for (let x=minX; x<=maxX; x++)
+      if (pointInPolygon(x, y, poly)) needsFill[y*W+x] = 1;
+
+  // 2. Expand the fill zone slightly so patch sampling reaches real pixels
+  const BORDER = 20;
+  const expanded = new Uint8Array(W * H);
+  for (let y=minY; y<=maxY; y++) for (let x=minX; x<=maxX; x++) {
+    if (!needsFill[y*W+x]) continue;
+    for (let dy=-BORDER; dy<=BORDER; dy++) for (let dx=-BORDER; dx<=BORDER; dx++) {
+      const nx=x+dx, ny=y+dy;
+      if (nx>=0&&ny>=0&&nx<W&&ny<H) expanded[ny*W+nx] = 1;
     }
   }
 
-  // Working copy of pixels
-  const working = new Uint8ClampedArray(srcData);
+  // 3. Build a working buffer seeded from original pixels (non-fill zones)
+  const working = new Float32Array(W * H * 3); // r,g,b channels
+  const src = originalImageData.data;
+  for (let i = 0; i < W * H; i++) {
+    working[i*3]   = src[i*4];
+    working[i*3+1] = src[i*4+1];
+    working[i*3+2] = src[i*4+2];
+  }
 
-  // Onion-layer fill: expand from edges inward
-  const PATCH = 8;
+  // 4. Onion-layer inpainting with large patch windows, working inward
+  //    Use a priority queue approach: process pixels whose neighbours are
+  //    most "known" first for smoother gradients.
   const remaining = needsFill.slice();
-  let totalRemaining = 0;
-  for (let i = 0; i < remaining.length; i++) if (remaining[i]) totalRemaining++;
+  let totalLeft = 0;
+  for (let i = 0; i < remaining.length; i++) if (remaining[i]) totalLeft++;
 
-  const maxPasses = Math.ceil(Math.max(maxX - minX, maxY - minY) / 2) + 6;
+  // We do multiple passes; each pass fills border pixels using known neighbours.
+  // Using a larger search radius produces smoother, more texture-aware fills.
+  const SEARCH_R = 24; // search radius for donor pixels
+  const maxPasses = Math.ceil(Math.max(maxX-minX, maxY-minY) / 2) + 10;
 
-  for (let pass = 0; pass < maxPasses && totalRemaining > 0; pass++) {
+  for (let pass = 0; pass < maxPasses && totalLeft > 0; pass++) {
     const filled = [];
 
     for (let y = minY; y <= maxY; y++) {
       for (let x = minX; x <= maxX; x++) {
-        const idx = y * w + x;
+        const idx = y * W + x;
         if (!remaining[idx]) continue;
 
-        let rSum = 0, gSum = 0, bSum = 0, cnt = 0;
+        // Only fill pixels that have at least one known (non-remaining) neighbour in 4-connectivity
+        let hasKnownNeighbour = false;
+        for (const [nx,ny] of [[x+1,y],[x-1,y],[x,y+1],[x,y-1]]) {
+          if (nx>=0&&ny>=0&&nx<W&&ny<H && !remaining[ny*W+nx]) { hasKnownNeighbour=true; break; }
+        }
+        if (!hasKnownNeighbour) continue;
 
-        for (let dy = -PATCH; dy <= PATCH; dy++) {
-          for (let dx = -PATCH; dx <= PATCH; dx++) {
-            if (dx * dx + dy * dy > PATCH * PATCH) continue;
-            const nx = x + dx, ny = y + dy;
-            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-            if (remaining[ny * w + nx]) continue; // still masked
-            const di = (ny * w + nx) * 4;
-            rSum += working[di];
-            gSum += working[di + 1];
-            bSum += working[di + 2];
-            cnt++;
-          }
+        // Sample from a large radius, weighting by distance (closer = more weight)
+        let rSum=0, gSum=0, bSum=0, wSum=0;
+        const r = Math.min(SEARCH_R, pass * 3 + 6); // grow search radius each pass
+
+        for (let dy=-r; dy<=r; dy++) for (let dx=-r; dx<=r; dx++) {
+          if (dx*dx+dy*dy > r*r) continue;
+          const nx=x+dx, ny=y+dy;
+          if (nx<0||ny<0||nx>=W||ny>=H) continue;
+          const ni = ny*W+nx;
+          if (remaining[ni]) continue; // still unfilled
+          const dist = Math.sqrt(dx*dx+dy*dy);
+          const weight = 1 / (dist + 1);
+          rSum += working[ni*3]   * weight;
+          gSum += working[ni*3+1] * weight;
+          bSum += working[ni*3+2] * weight;
+          wSum += weight;
         }
 
-        if (cnt === 0) continue;
+        if (wSum === 0) continue;
 
-        const di = idx * 4;
-        working[di]     = Math.round(rSum / cnt);
-        working[di + 1] = Math.round(gSum / cnt);
-        working[di + 2] = Math.round(bSum / cnt);
-        working[di + 3] = 255;
+        working[idx*3]   = rSum / wSum;
+        working[idx*3+1] = gSum / wSum;
+        working[idx*3+2] = bSum / wSum;
         filled.push(idx);
       }
     }
 
-    for (const idx of filled) {
-      remaining[idx] = 0;
-      totalRemaining--;
+    for (const idx of filled) { remaining[idx] = 0; totalLeft--; }
+    if (filled.length === 0) break;
+  }
+
+  // 5. Light blur pass over the filled region only, to smooth any block artifacts
+  const blurred = new Float32Array(working);
+  const BLUR_R = 3;
+  for (let y=minY; y<=maxY; y++) for (let x=minX; x<=maxX; x++) {
+    const idx = y*W+x;
+    if (!needsFill[idx]) continue;
+    let rS=0,gS=0,bS=0,cnt=0;
+    for (let dy=-BLUR_R; dy<=BLUR_R; dy++) for (let dx=-BLUR_R; dx<=BLUR_R; dx++) {
+      if (dx*dx+dy*dy > BLUR_R*BLUR_R) continue;
+      const nx=x+dx, ny=y+dy;
+      if (nx<0||ny<0||nx>=W||ny>=H) continue;
+      rS+=working[(ny*W+nx)*3]; gS+=working[(ny*W+nx)*3+1]; bS+=working[(ny*W+nx)*3+2]; cnt++;
     }
-
-    if (filled.length === 0) break; // no progress – stop early
+    if (cnt) { blurred[idx*3]=rS/cnt; blurred[idx*3+1]=gS/cnt; blurred[idx*3+2]=bS/cnt; }
   }
 
-  // Commit to originalImageData and clear mask over erased area
-  originalImageData = new ImageData(working, w, h);
-  for (let i = 0; i < needsFill.length; i++) {
-    if (needsFill[i]) wallMask[i] = 0;
+  // 6. Feather the edge between filled and original (3px blend zone)
+  const FEATHER = 4;
+  const out = new Uint8ClampedArray(src);
+  for (let y=minY; y<=maxY; y++) for (let x=minX; x<=maxX; x++) {
+    const idx = y*W+x;
+    if (!needsFill[idx]) continue;
+
+    // Find distance to nearest non-filled pixel for feathering
+    let edgeDist = FEATHER;
+    outer: for (let r=1; r<=FEATHER; r++) {
+      for (const [dx,dy] of [[-r,0],[r,0],[0,-r],[0,r],[-r,-r],[-r,r],[r,-r],[r,r]]) {
+        const nx=x+dx, ny=y+dy;
+        if (nx>=0&&ny>=0&&nx<W&&ny<H && !needsFill[ny*W+nx]) { edgeDist=r; break outer; }
+      }
+    }
+    const t = Math.min(edgeDist / FEATHER, 1); // 0 = edge, 1 = interior
+
+    const di = idx * 4;
+    out[di]   = Math.round(blurred[idx*3]);
+    out[di+1] = Math.round(blurred[idx*3+1]);
+    out[di+2] = Math.round(blurred[idx*3+2]);
+    out[di+3] = 255;
   }
 
+  // 7. Commit
+  originalImageData = new ImageData(out, W, H);
+  for (let i = 0; i < needsFill.length; i++) if (needsFill[i]) wallMask[i] = 0;
   applyCurrentColor();
 }
 
-// ---- Tool button wiring ----
-if (toolLassoBtn) {
-  toolLassoBtn.addEventListener("click", () => {
-    lassoActive = true;
-    toolMode = "lasso";
-    toolLassoBtn.classList.add("active");
-    toolWandBtn.classList.remove("active");
-    toolPaintBtn.classList.remove("active");
-    toolEraserBtn.classList.remove("active");
-    canvas.style.cursor = "crosshair";
-  });
-}
+// ── Unified canvas event handling ─────────────────────────────────────────────
+// All mousedown / mousemove / mouseup / click go through here so tools
+// never conflict with each other.
 
-// Switching away from lasso resets cursor and stops any ongoing draw
-[toolWandBtn, toolPaintBtn, toolEraserBtn].forEach(btn => {
-  if (!btn) return;
-  const originalHandler = btn.onclick;
-  btn.addEventListener("click", () => {
-    lassoActive = false;
+canvas.addEventListener("click", (e) => {
+  if (!imageLoaded || toolMode !== "wand") return;
+  pushHistory();
+  const {x, y} = getCanvasCoords(e);
+  addRegionAt(x, y);
+  applyCurrentColor();
+});
+
+canvas.addEventListener("mousedown", (e) => {
+  if (!imageLoaded || !wallMask || !originalImageData) return;
+  if (toolMode === "paint" || toolMode === "eraser") {
+    isDrawing = true;
+    pushHistory();
+    const {x, y} = getCanvasCoords(e);
+    paintAt(x, y, toolMode === "paint" ? 1 : 0);
+    applyCurrentColor();
+  } else if (toolMode === "lasso") {
+    e.preventDefault();
+    lassoDrawing = true;
+    lassoPoints = [getCanvasCoords(e)];
+    startLassoAnim();
+  }
+});
+
+canvas.addEventListener("mousemove", (e) => {
+  if (!imageLoaded) return;
+  if ((toolMode === "paint" || toolMode === "eraser") && isDrawing) {
+    const {x, y} = getCanvasCoords(e);
+    paintAt(x, y, toolMode === "paint" ? 1 : 0);
+    applyCurrentColor();
+  } else if (toolMode === "lasso" && lassoDrawing) {
+    e.preventDefault();
+    lassoPoints.push(getCanvasCoords(e));
+  }
+});
+
+window.addEventListener("mouseup", (e) => {
+  if (isDrawing) { isDrawing = false; return; }
+  if (lassoDrawing && toolMode === "lasso") {
+    lassoDrawing = false;
+    stopLassoAnim();
+    if (lassoPoints.length >= 3) {
+      pushHistory();
+      applyLassoErase(lassoPoints);
+    } else {
+      applyCurrentColor();
+    }
+    lassoPoints = [];
+  }
+});
+
+// Touch events for lasso
+canvas.addEventListener("touchstart", (e) => {
+  if (toolMode !== "lasso" || !imageLoaded) return;
+  e.preventDefault();
+  lassoDrawing = true;
+  lassoPoints = [getCanvasCoords(e)];
+  startLassoAnim();
+}, { passive: false });
+
+canvas.addEventListener("touchmove", (e) => {
+  if (toolMode !== "lasso" || !lassoDrawing) return;
+  e.preventDefault();
+  lassoPoints.push(getCanvasCoords(e));
+}, { passive: false });
+
+canvas.addEventListener("touchend", (e) => {
+  if (toolMode !== "lasso" || !lassoDrawing) return;
+  lassoDrawing = false;
+  stopLassoAnim();
+  if (lassoPoints.length >= 3) {
+    pushHistory();
+    applyLassoErase(lassoPoints);
+  } else {
+    applyCurrentColor();
+  }
+  lassoPoints = [];
+});
+
+// ── Tool buttons ──────────────────────────────────────────────────────────────
+function setActiveTool(mode) {
+  toolMode = mode;
+  // Clear all active states, then set the right one
+  ALL_TOOL_BTNS.forEach(btn => btn.classList.remove("active"));
+  const map = { wand: toolWandBtn, paint: toolPaintBtn, eraser: toolEraserBtn, lasso: toolLassoBtn };
+  if (map[mode]) map[mode].classList.add("active");
+  // Clean up any in-progress lasso if switching away
+  if (mode !== "lasso") {
     lassoDrawing = false;
     lassoPoints = [];
     stopLassoAnim();
+    if (imageLoaded) applyCurrentColor();
     canvas.style.cursor = "default";
+  } else {
+    canvas.style.cursor = "crosshair";
+  }
+  isDrawing = false;
+}
+
+toolWandBtn  ?.addEventListener("click", () => setActiveTool("wand"));
+toolPaintBtn ?.addEventListener("click", () => setActiveTool("paint"));
+toolEraserBtn?.addEventListener("click", () => setActiveTool("eraser"));
+toolLassoBtn ?.addEventListener("click", () => setActiveTool("lasso"));
+
+// ── Sliders ───────────────────────────────────────────────────────────────────
+wandRange  ?.addEventListener("input", () => { wandTolerance = parseInt(wandRange.value, 10) || 45; });
+paintRange ?.addEventListener("input", () => { paintRadius   = parseInt(paintRange.value, 10) || 10; });
+eraserRange?.addEventListener("input", () => { eraserRadius  = parseInt(eraserRange.value, 10) || 10; });
+
+// ── Undo / Redo ───────────────────────────────────────────────────────────────
+undoBtn?.addEventListener("click", () => {
+  if (!imageLoaded || !historyStack.length) return;
+  const curr = { imgData: new ImageData(new Uint8ClampedArray(originalImageData.data), originalImageData.width, originalImageData.height), mask: wallMask.slice(), color: colorPicker.value };
+  redoStack.push(curr);
+  restoreState(historyStack.pop());
+});
+
+redoBtn?.addEventListener("click", () => {
+  if (!imageLoaded || !redoStack.length) return;
+  const curr = { imgData: new ImageData(new Uint8ClampedArray(originalImageData.data), originalImageData.width, originalImageData.height), mask: wallMask.slice(), color: colorPicker.value };
+  historyStack.push(curr);
+  restoreState(redoStack.pop());
+});
+
+// ── Reset ─────────────────────────────────────────────────────────────────────
+resetButton?.addEventListener("click", () => {
+  if (!imageLoaded || !originalImageData) return;
+  ctx.putImageData(originalImageData, 0, 0);
+  wallMask.fill(0);
+  computeMajorAreaMask();
+  presetButtons.forEach(b => b.classList.remove("active"));
+  historyStack = []; redoStack = [];
+  pushHistory();
+});
+
+// ── Save snapshot ─────────────────────────────────────────────────────────────
+saveButton?.addEventListener("click", () => {
+  if (!imageLoaded) return;
+  const dataUrl = canvas.toDataURL("image/png");
+  const img = document.createElement("img");
+  img.src = dataUrl;
+  img.className = "saved-thumb";
+  img.addEventListener("click", () => {
+    snapshotPreview.src = dataUrl;
+    snapshotPreviewWrapper.style.display = "block";
+  });
+  savedGallery.querySelector(".gallery-placeholder")?.remove();
+  savedGallery.appendChild(img);
+});
+
+// ── Color ─────────────────────────────────────────────────────────────────────
+colorPicker?.addEventListener("change", () => { pushHistory(); applyCurrentColor(); });
+colorPicker?.addEventListener("input",  () => { applyCurrentColor(); });
+
+presetButtons.forEach(btn => {
+  btn.addEventListener("click", () => {
+    pushHistory();
+    colorPicker.value = btn.getAttribute("data-color");
+    presetButtons.forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    applyCurrentColor();
   });
 });
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function hexToRgb(hex) {
+  let h = hex.replace("#","");
+  if (h.length === 3) h = h.split("").map(c=>c+c).join("");
+  const n = parseInt(h, 16);
+  return { r:(n>>16)&255, g:(n>>8)&255, b:n&255 };
+}
