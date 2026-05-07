@@ -161,7 +161,17 @@ export function FurnitureItem({
     const { centerX, centerY, startAngle, startRotation } = rotateRef.current
     const currentAngle = Math.atan2(e.clientY - centerY, e.clientX - centerX) * (180 / Math.PI)
     const delta = currentAngle - startAngle
-    onPositionChange({ rotationDeg: startRotation + delta })
+    let newRotation = startRotation + delta
+
+    // Normalise to [-180, 180] so snap zone is consistent regardless of
+    // how many full turns the user has accumulated.
+    const normalised = ((newRotation % 360) + 540) % 360 - 180
+    const SNAP_DEG = 8 // degrees either side of 0 that snap
+    if (Math.abs(normalised) <= SNAP_DEG) {
+      newRotation = 0
+    }
+
+    onPositionChange({ rotationDeg: newRotation })
   }, [onPositionChange])
 
   const onRotateUp = useCallback(() => {
@@ -198,13 +208,17 @@ export function FurnitureItem({
             onPointerMove={onRotateMove}
             onPointerUp={onRotateUp}
             onPointerCancel={onRotateUp}
-            title="Rotate"
+            title="Rotate (snaps to 0°)"
             style={{
               width: 20, height: 20, borderRadius: "50%",
-              background: "#c89968", border: "2px solid white",
+              background: rotationDeg === 0 ? "#fff" : "#c89968",
+              border: `2px solid ${rotationDeg === 0 ? "#c89968" : "white"}`,
+              boxShadow: rotationDeg === 0 ? "0 0 6px 2px #c89968" : "none",
               cursor: "grab", touchAction: "none",
               display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 11, color: "white", userSelect: "none",
+              fontSize: 11, color: rotationDeg === 0 ? "#c89968" : "white",
+              userSelect: "none",
+              transition: "background 0.15s, box-shadow 0.15s",
             }}
           >↻</div>
         </div>
