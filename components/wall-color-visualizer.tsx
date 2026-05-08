@@ -17,8 +17,9 @@ export function WallColorVisualizer() {
 
     const script = document.createElement("script")
     script.id = "visualizer-engine-script"
-    script.src = "/script.js"
-    script.defer = true
+    // Cache-buster so the browser never serves a stale /script.js from the
+    // disk/memory cache when remounting (e.g. after navigating away and back).
+    script.src = `/script.js?v=${Date.now()}`
     document.body.appendChild(script)
 
     return () => {

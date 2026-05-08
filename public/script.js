@@ -1,6 +1,13 @@
 
+// Wrapped in an IIFE so the top-level `const`s live in function scope, not
+// the global scope. Without this, navigating away from /visualizer and back
+// re-injects this script, causing "Identifier 'imageInput' has already been
+// declared" and silently breaking upload until a hard reload.
+(function () {
+
 // Set footer year
-document.getElementById("year").textContent = new Date().getFullYear();
+const yearEl = document.getElementById("year");
+if (yearEl) yearEl.textContent = new Date().getFullYear();
 
 const imageInput            = document.getElementById("imageInput");
 const canvas                = document.getElementById("previewCanvas");
@@ -523,3 +530,5 @@ function hexToRgb(hex) {
   const n=parseInt(h,16);
   return {r:(n>>16)&255,g:(n>>8)&255,b:n&255};
 }
+
+})();

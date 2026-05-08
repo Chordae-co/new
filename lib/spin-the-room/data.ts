@@ -82,17 +82,21 @@ const TINT_WOOD: TintPredicate = (r, g, b) => {
   return hueDeg >= 12 && hueDeg <= 50 && s >= 0.12 && l >= 0.1 && l <= 0.85
 }
 
-// Bright fabric: high lightness, low-to-moderate saturation. Captures cream/
-// white cushion pixels while leaving the dark wooden ottoman legs alone.
-const TINT_BRIGHT_FABRIC: TintPredicate = (r, g, b) => {
-  const { l, s } = rgbToHsl(r, g, b)
-  return l > 0.55 && s < 0.45
+// Cushion (any lighting), excluding the dark wooden legs. Anything in the
+// warm-brown hue band with real saturation and low lightness is treated as
+// leg/wood; everything else gets tinted — so shadowed cushion regions on the
+// right side aren't skipped.
+const TINT_FABRIC_NOT_WOOD: TintPredicate = (r, g, b) => {
+  const { h, s, l } = rgbToHsl(r, g, b)
+  const hueDeg = h * 360
+  const isLeg = hueDeg >= 10 && hueDeg <= 50 && s >= 0.2 && l < 0.5
+  return !isLeg
 }
 
 export const TINT_PREDICATES = {
   all: TINT_ALL,
   wood: TINT_WOOD,
-  brightFabric: TINT_BRIGHT_FABRIC,
+  fabricNotWood: TINT_FABRIC_NOT_WOOD,
 }
 
 // Swatch palettes
@@ -201,7 +205,7 @@ export const FURNITURE: Record<FurnitureId, Furniture> = {
     src: "/furniture/ottoman.png",
     category: "upholstery",
     swatches: UPHOLSTERY_SWATCHES,
-    tintPredicate: TINT_BRIGHT_FABRIC,
+    tintPredicate: TINT_FABRIC_NOT_WOOD,
     preferredSlots: ["right", "front", "left"],
     wheelColor: "#d8cdb6",
   },
