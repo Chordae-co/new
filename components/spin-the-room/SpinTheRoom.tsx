@@ -18,6 +18,7 @@ import { SpinWheel } from "./SpinWheel"
 import { ColorPicker } from "./ColorPicker"
 import { ComboSetBrowser } from "./ComboSetBrowser"
 import { PieceActions } from "./PieceActions"
+import { exportRoomImage } from "@/lib/spin-the-room/exportImage"
 
 function slotToFreePosition(slot: SlotId): FreePosition {
   const s = SLOTS[slot]
@@ -31,6 +32,7 @@ export function SpinTheRoom() {
   const [spinsUsed, setSpinsUsed] = useState(0)
   // Track which slots are in use so pickSlotFor still works for initial placement
   const [occupiedSlots, setOccupiedSlots] = useState<Set<SlotId>>(new Set())
+  const [saving, setSaving] = useState(false)
   const objectUrlRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -74,6 +76,35 @@ export function SpinTheRoom() {
     setSpinsUsed(0)
     setSelectedId(null)
     setOccupiedSlots(new Set())
+  }
+
+  const handleSave = async () => {
+    if (!roomImageUrl || placed.length === 0 || saving) return
+    setSaving(true)
+    try {
+      const blob = await exportRoomImage(
+        roomImageUrl,
+        placed.map((p) => ({
+          id: p.id,
+          xPercent: p.position.xPercent,
+          yPercent: p.position.yPercent,
+          widthPercent: p.position.widthPercent,
+          rotationDeg: p.position.rotationDeg,
+          zIndex: p.position.zIndex,
+          tintHex: p.tintHex,
+        })),
+      )
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = `spin-the-room-${Date.now()}.png`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleSelectItem = (id: FurnitureId | null) => {
@@ -190,6 +221,14 @@ export function SpinTheRoom() {
               disabled={placed.length === 0 && spinsUsed === 0}
             >
               Reset Room
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              className="flex-1 rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-[#b08040] disabled:cursor-not-allowed disabled:opacity-40"
+              disabled={!roomImageUrl || placed.length === 0 || saving}
+            >
+              {saving ? "Saving…" : "Save Image"}
             </button>
           </div>
         </div>
